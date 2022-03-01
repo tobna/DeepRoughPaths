@@ -14,6 +14,8 @@ _poss_einsum_indices = string.ascii_lowercase[0] + string.ascii_lowercase[2:]
 def _tensor_log(X):
     assert (X[0] == ones_like(X[0])).all(), f"First component has to be 1, but was {X[0]}"
     max_level = len(X) - 1
+    assert max_level <= len(_poss_einsum_indices), f"Implementation can only handle tensors with maximal level of " \
+                                                   f"{len(_poss_einsum_indices)}, but got {max_level}"
     is_batched = len(X[0].shape) > 0
     if max_level <= 0:
         return [zeros_like(X[0])]
