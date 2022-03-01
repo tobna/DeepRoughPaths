@@ -17,9 +17,8 @@ def _tensor_log(X):
     is_batched = len(X[0].shape) > 0
     if max_level <= 0:
         return [zeros_like(X[0])]
-    log_X = deepcopy(X)
-    log_X[0] = zeros_like(X[0])
-    X_tensor_n_last = deepcopy(log_X)
+    log_X = [zeros_like(x) if i == 0 else x.clone() for i, x in enumerate(X)]
+    X_tensor_n_last = [zeros_like(x) if i == 0 else x.clone() for i, x in enumerate(X)]
     for n in range(2, max_level + 1):
         factor = (-1)**(n + 1)/n
         X_tensor_n = len(X) * [0]
