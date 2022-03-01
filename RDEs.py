@@ -2,6 +2,7 @@ from RoughPaths import *
 from math import ceil
 from torch.autograd.functional import jacobian
 from tqdm import tqdm
+from torch import is_tensor
 
 
 def _e(i, n, batch_size=None):
@@ -50,7 +51,7 @@ class RDESolution:
     with a rough path x
     """
 
-    def __init__(self, drift, f, m, path: RoughPath, starting_point=None, delta_t_max=0.001, for_backprop=False):
+    def __init__(self, drift, f, m, path: RoughPath, f_prime="difference_quotient", starting_point=None, delta_t_max=0.001):
         """
         Solution to the RDE dY = mu(Y, t) dt + f(Y) dx
         with a rough path x
@@ -58,14 +59,20 @@ class RDESolution:
         :param drift: mu: (Y [b x m], t [1]) |-> mu(Y, t) [b x m]
         :param f: Y [b x m] |-> f(Y) [b x m x n]
         :param path: Rough path x
+        :param f_prime: Y [b x m], t[1] |-> D_Y f [b x m x n x m] OR 'difference_quotient', 'exact_no_grads', 'exact_with_grads' for automatic computation OR constant tensor [b x m x n x m]
         :param starting_point: Y_0
         :param delta_t_max: max delta t for approximation
-        :param for_backprop: Compute the jacobian in a differentiable way; needed for backpropagation through Df
         """
         self.drift = drift
         self.f = f
+        assert callable(f_prime) or is_tensor(f_prime) or f_prime in ["difference_quotient", "exact_no_grads", "exact_with_grads"],\
+            f"prime has to be a function, a tensor, or computation strategy, but got {f_prime}"
+        if is_tensor(f_prime):
+            assert f_prime.shape[0] == path.batch_size and f_prime.shape[1] == f_prime.shape[3] == m\
+                and f_prime.shape[2] == path.n, f"Constant f_prime needs to be tensor of shape [b x m x n x m]" \
+                                                f"= [{path.batch_size}, {m}, {path.n}, {m}], but got {f_prime.shape}."
+        self.f_prime = f_prime
         self.path = path
-        self.create_graph = for_backprop
         if starting_point is None:
             starting_point = zeros(path.batch_size, m)
         if isinstance(starting_point, int) or isinstance(starting_point, float):
@@ -107,13 +114,18 @@ class RDESolution:
         for t_i in iteration:
             mu = self.drift(Y_last_t_i, last_t_i)  # b x m
             sigma = Y_prime_last_t = self.f(Y_last_t_i, last_t_i)
-            if self.create_graph:
-                # torch -> jacobian can calculate jacobians in a differentiable way, but with horrible runtime. Approximation gives speedup of ~500 times.
-                grad_f_Y = _approx_jacobian_x(self.f, Y_last_t_i, tensor(last_t_i), self.delta_t_max/2)
-                # grad_f_Y = cat([jacobian(self.f, (Y_last_t_i[j].unsqueeze(0), tensor(last_t_i)), vectorize=True, create_graph=True)[0].squeeze(3) for j in range(Y_last_t_i.shape[0])], dim=0)  # b x m x n x m
-                # grad_f_Y = einsum('abcad -> abcd', jacobian(self.f, (Y_last_t_i, tensor(last_t_i)), vectorize=True, create_graph=True)[0])  # b x m x n x m
+            if self.f_prime == "difference_quotient":
+                grad_f_Y = _approx_jacobian_x(self.f, Y_last_t_i, tensor(last_t_i), self.delta_t_max / 2)
+            elif self.f_prime == "exact_no_grads":
+                grad_f_Y = einsum('abcad -> abcd',
+                                  jacobian(self.f, (Y_last_t_i, tensor(last_t_i)), vectorize=True)[0])  # b x m x n x m
+            elif self.f_prime == "exact_with_grads":
+                grad_f_Y = einsum('abcad -> abcd', jacobian(self.f, (Y_last_t_i, tensor(last_t_i)), vectorize=True, create_graph=True)[0])  # b x m x n x m
+            elif is_tensor(self.f_prime):
+                grad_f_Y = self.f_prime
             else:
-                grad_f_Y = einsum('abcad -> abcd', jacobian(self.f, (Y_last_t_i, tensor(last_t_i)), vectorize=True)[0])  # b x m x n x m
+                grad_f_Y = self.f_prime(Y_last_t_i, tensor(last_t_i))
+
             # batched matmul
             f_Y_prime = einsum('bijk,bkl -> bijl', grad_f_Y, Y_prime_last_t)  # b x m x n x n
             delta_controlled_path = ConstantControlledPath(sigma, f_Y_prime)
