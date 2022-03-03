@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
-from torch import tensor, zeros, normal, ones, eye, Tensor, einsum, cat, zeros_like, ones_like, tensordot
+from torch import tensor, zeros, normal, ones, eye, Tensor, einsum, cat, zeros_like, ones_like
 from torch.autograd.functional import jacobian
-from math import sqrt, ceil
+from torch.linalg import cholesky
+from math import sqrt, ceil, factorial, floor
 from tqdm import tqdm
 from itertools import product
-from copy import copy, deepcopy
 import string
 
 
@@ -36,6 +36,30 @@ def _tensor_log(X):
         for i, Xi in enumerate(X_tensor_n):
             log_X[i] += factor * Xi
     return log_X
+
+
+def _tensor_exp(X):
+    max_level = len(X) - 1
+    is_batched = len(X[0].shape) > 0
+    if max_level <= 0:
+        return [X[0].exp()]
+    exp_X = [ones_like(x) if i == 0 else x.clone() for i, x in enumerate(X)]
+    X_tensor_n_last = [x.exp() if i == 0 else x.clone() for i, x in enumerate(X)]
+    for n in range(2, max_level + 1):
+        factor = X[0].exp()[0] / factorial(n)
+        X_tensor_n = len(X) * [0]
+        for i, j in product(range(1, max_level + 1), repeat=2):
+            if i + j > max_level:
+                continue
+            if is_batched:
+                einsum_str = _poss_einsum_indices[:j]
+                X_tensor_n[i + j] += einsum(f'b...,b{einsum_str} -> b...{einsum_str}', X_tensor_n_last[i], X[j])
+            else:
+                einsum_str = _poss_einsum_indices[:j]
+                X_tensor_n[i + j] += einsum(f'b...,{einsum_str} -> b...{einsum_str}', X_tensor_n_last[i], X[j])
+        for i, Xi in enumerate(X_tensor_n):
+            exp_X[i] += factor * Xi
+    return exp_X
 
 
 class RoughPath(ABC):
@@ -257,6 +281,55 @@ class ItoBrownianRoughPath(StratonovichBrownianRoughPath):
     def __call__(self, t):
         B_t, B2_t = super(ItoBrownianRoughPath, self).__call__(t)
         return B_t, B2_t - t / 2 * eye(self.n).view(1, self.n, self.n).repeat(self.batch_size, 1, 1)
+
+
+class StratonovichFractionalBrownianRoughPath(StratonovichBrownianRoughPath):
+    def __init__(self, n, H, steps=1000, T=1., batch_size=1):
+        super(StratonovichFractionalBrownianRoughPath, self).__init__(n, batch_size)
+        self.H = H
+        self.steps = steps
+        self.T = T
+        self.del_t = self.T / self.steps
+
+        self.vals_bm = None
+        self.std_div_mat = None
+        self._precompute_vals()
+
+    def cov(self, s, t):
+        return (pow(s, 2*self.H) + pow(t, 2*self.H) - pow(abs(t - s), 2*self.H))/2
+
+    def _precompute_vals(self):
+        if self.std_div_mat is None:
+            cov_mat = [[self.cov(self.del_t * (i + 1), self.del_t * (j + 1)) for i in range(self.steps)] for j in range(self.steps)]
+            cov_mat = tensor(cov_mat)
+            self.std_div_mat = cholesky(cov_mat)
+
+        z = normal(0, ones(self.batch_size, self.n, self.steps))
+        self.vals_bm = einsum('ij, bnj -> bni', self.std_div_mat, z)
+
+    def _bm(self, t):
+        assert t >= 0, f"Only positive time possible, but got {t}"
+        step = t / self.del_t
+        step_lower = int(step) - 1
+        step_upper = min([step_lower + 1, self.steps - 1])
+        step_perc = step - step_lower
+        if step_lower < 0:
+            val_lower = zeros(self.batch_size, self.n)
+        else:
+            val_lower = self.vals_bm[:, :, step_lower]
+        val_upper = self.vals_bm[:, :, step_upper]
+        return (1 - step_perc) * val_lower + step_perc * val_upper
+
+    def reset(self):
+        super(StratonovichFractionalBrownianRoughPath, self).reset()
+        self.vals_bm = None
+        self._precompute_vals()
+
+
+class ItoFractionalBrownianRoughPath(StratonovichFractionalBrownianRoughPath):
+    def __call__(self, t):
+        x1, x2 = super(ItoFractionalBrownianRoughPath, self).__call__(t)
+        return x1, x2 - pow(t, 2 * self.H) / 2 * eye(self.n).view(1, self.n, self.n).repeat(self.batch_size, 1, 1)
 
 
 class FTime(ControlledPath):
