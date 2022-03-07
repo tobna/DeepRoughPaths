@@ -165,34 +165,32 @@ class RoughPath(ABC):
         iterator = [tau for tau in admissible_t_i if tau > t_start]
         if show_progress:
             iterator = tqdm(iterator)
+        sig_vals_last_t_i = [sig_list[0]] + [x1_last, x2_last] + [sig_val[t_start] for sig_val in self.signature_vals]
         for t_i in iterator:
             x1_t_i, x2_t_i = self(t_i)
             x1_delta = x1_t_i - x1_last
             x2_delta = x2_t_i - x2_last - einsum('ab,ac -> abc', x1_last, x1_delta)
-
+            sig_vals_t_i = [sig_vals_last_t_i[0], x1_t_i, x2_t_i]
             for n in range(3, N):
-                sig_vals_idx = n - 3
-                if n == 3:
-                    sig_t_last_n_second_last, sig_t_last_n_last = self(last_t_i)
-                elif n == 4:
-                    _, sig_t_last_n_second_last = self(last_t_i)
-                    sig_t_last_n_last = self.signature_vals[sig_vals_idx - 1][last_t_i]
-                else:
-                    sig_t_last_n_second_last = self.signature_vals[sig_vals_idx - 2][last_t_i]
-                    sig_t_last_n_last = self.signature_vals[sig_vals_idx - 1][last_t_i]
 
-                self.signature_vals[sig_vals_idx][t_i] = self.signature_vals[sig_vals_idx][last_t_i] + \
-                                                         einsum('b...,bj -> b...j', sig_t_last_n_last, x1_delta) + \
-                                                         einsum('b...,bij -> b...ij', sig_t_last_n_second_last,
-                                                                x2_delta)
-
-                if len(self.signature_vals[sig_vals_idx]) > self.sig_cache_size:
-                    # cache getting too large; remove the smallest cached time > 0
-                    self.signature_vals[sig_vals_idx].pop(min([tau for tau in self.signature_vals[sig_vals_idx].keys()
-                                                               if tau > 0.]))
+                sig_val_t_i_lv_n = sig_vals_last_t_i[n] + einsum('b...,bj -> b...j', sig_vals_last_t_i[n-1], x1_delta) + \
+                                   einsum('b...,bij -> b...ij', sig_vals_last_t_i[n-2], x2_delta)
+                sig_vals_t_i.append(sig_val_t_i_lv_n)
+            sig_vals_last_t_i = sig_vals_t_i
 
             last_t_i = t_i
             x1_last, x2_last = x1_t_i, x2_t_i
+
+        for n, sig_val_t in enumerate(sig_vals_last_t_i):
+            if n < 3:
+                continue
+            sig_vals_idx = n - 3
+            self.signature_vals[sig_vals_idx][last_t_i] = sig_vals_last_t_i[n]
+
+        if len(self.signature_vals[sig_vals_idx]) > self.sig_cache_size:
+            # cache getting too large; remove the smallest cached time > 0
+            self.signature_vals[sig_vals_idx].pop(min([tau for tau in self.signature_vals[sig_vals_idx].keys()
+                                                       if tau > 0.]))
 
         for n in range(3, N):
             sig_vals_idx = n - 3
@@ -236,100 +234,6 @@ class FunctionControlledPath(ControlledPath):
         # take out additional batch dimensions
         grad_f_x_t = einsum('abcad -> abcd', jacobian(self.f, x_t, vectorize=True, create_graph=self.create_graph))
         return self.f(x_t), grad_f_x_t
-
-
-class StratonovichBrownianRoughPath(RoughPath):
-    def __init__(self, n, batch_size=1):
-        super(StratonovichBrownianRoughPath, self).__init__(n, batch_size)
-        self.vals_bm1 = {0: zeros(batch_size, n)}
-
-    p = 2.00001
-
-    def _bm(self, t):
-        assert t >= 0, f"Only positive time possible, but got {t}"
-        if t in self.vals_bm1.keys():
-            return self.vals_bm1[t]
-
-        max_t = max(self.vals_bm1.keys())
-        if t > max_t:
-            last_t = max_t
-            Z = normal(0, ones(self.batch_size, self.n))
-            B_t = self.vals_bm1[last_t] + sqrt(t - last_t) * Z
-            self.vals_bm1[t] = B_t
-            return B_t
-
-        # Brownian bridge construction
-        last_t = max([s for s in self.vals_bm1.keys() if s < t])
-        next_t = min([s for s in self.vals_bm1.keys() if s > t])
-        Z = normal(0, ones(self.batch_size, self.n))
-        B_t = (t - last_t) / (next_t - last_t) * self.vals_bm1[next_t] + (next_t - t) / (next_t - last_t) \
-              * self.vals_bm1[last_t] + sqrt((next_t - t) * (t - last_t) / (next_t - last_t)) * Z
-        self.vals_bm1[t] = B_t
-        return B_t
-
-    def reset(self):
-        super(StratonovichBrownianRoughPath, self).reset()
-        self.vals_bm1 = {0: zeros(self.batch_size, self.n)}
-
-    def __call__(self, t):
-        super(StratonovichBrownianRoughPath, self).__call__(t)
-        B_t = self._bm(t)
-        return B_t, 1 / 2 * einsum('bi,bj -> bij', B_t, B_t)
-
-
-class ItoBrownianRoughPath(StratonovichBrownianRoughPath):
-    def __call__(self, t):
-        B_t, B2_t = super(ItoBrownianRoughPath, self).__call__(t)
-        return B_t, B2_t - t / 2 * eye(self.n).view(1, self.n, self.n).repeat(self.batch_size, 1, 1)
-
-
-class StratonovichFractionalBrownianRoughPath(StratonovichBrownianRoughPath):
-    def __init__(self, n, H, steps=1000, T=1., batch_size=1):
-        super(StratonovichFractionalBrownianRoughPath, self).__init__(n, batch_size)
-        self.H = H
-        self.steps = steps
-        self.T = T
-        self.del_t = self.T / self.steps
-
-        self.vals_bm = None
-        self.std_div_mat = None
-        self._precompute_vals()
-
-    def cov(self, s, t):
-        return (pow(s, 2*self.H) + pow(t, 2*self.H) - pow(abs(t - s), 2*self.H))/2
-
-    def _precompute_vals(self):
-        if self.std_div_mat is None:
-            cov_mat = [[self.cov(self.del_t * (i + 1), self.del_t * (j + 1)) for i in range(self.steps)] for j in range(self.steps)]
-            cov_mat = tensor(cov_mat)
-            self.std_div_mat = cholesky(cov_mat)
-
-        z = normal(0, ones(self.batch_size, self.n, self.steps))
-        self.vals_bm = einsum('ij, bnj -> bni', self.std_div_mat, z)
-
-    def _bm(self, t):
-        assert t >= 0, f"Only positive time possible, but got {t}"
-        step = t / self.del_t
-        step_lower = int(step) - 1
-        step_upper = min([step_lower + 1, self.steps - 1])
-        step_perc = step - step_lower
-        if step_lower < 0:
-            val_lower = zeros(self.batch_size, self.n)
-        else:
-            val_lower = self.vals_bm[:, :, step_lower]
-        val_upper = self.vals_bm[:, :, step_upper]
-        return (1 - step_perc) * val_lower + step_perc * val_upper
-
-    def reset(self):
-        super(StratonovichFractionalBrownianRoughPath, self).reset()
-        self.vals_bm = None
-        self._precompute_vals()
-
-
-class ItoFractionalBrownianRoughPath(StratonovichFractionalBrownianRoughPath):
-    def __call__(self, t):
-        x1, x2 = super(ItoFractionalBrownianRoughPath, self).__call__(t)
-        return x1, x2 - pow(t, 2 * self.H) / 2 * eye(self.n).view(1, self.n, self.n).repeat(self.batch_size, 1, 1)
 
 
 class FTime(ControlledPath):
