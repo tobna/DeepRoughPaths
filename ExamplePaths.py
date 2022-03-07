@@ -5,6 +5,7 @@ class StratonovichBrownianRoughPath(RoughPath):
     def __init__(self, n, batch_size=1):
         super(StratonovichBrownianRoughPath, self).__init__(n, batch_size)
         self.vals_bm1 = {0: zeros(batch_size, n)}
+        self.vals_bm2 = {0: zeros(batch_size, n, n)}
 
     p = 2.00001
 
@@ -28,16 +29,45 @@ class StratonovichBrownianRoughPath(RoughPath):
         B_t = (t - last_t) / (next_t - last_t) * self.vals_bm1[next_t] + (next_t - t) / (next_t - last_t) \
               * self.vals_bm1[last_t] + sqrt((next_t - t) * (t - last_t) / (next_t - last_t)) * Z
         self.vals_bm1[t] = B_t
+        for k in self.vals_bm2.keys():
+            if k < t:
+                continue
+            # use all sampled points for approximation of iterated integrals
+            self.vals_bm2.pop(k)
         return B_t
+
+    def _bm2(self, t):
+        assert t in self.vals_bm1.keys(), f"Iterated integrals can only be calculated after value at this point is " \
+                                          f"called; but got t={t}"
+        if t in self.vals_bm2.keys():
+            return self.vals_bm2[t]
+
+        t_start = max(self.vals_bm2.keys())
+        bm2_s = self.vals_bm2[t_start]
+        s_last = t_start
+        for s in sorted(self.vals_bm1.keys()):
+            if s <= t_start:
+                continue
+
+            bm2_s = bm2_s + einsum('bi, bj -> bij', self.vals_bm1[s], self.vals_bm1[s] - self.vals_bm1[s_last])
+            self.vals_bm2[s] = bm2_s
+
+            if s == t:
+                break
+        return bm2_s
 
     def reset(self):
         super(StratonovichBrownianRoughPath, self).reset()
         self.vals_bm1 = {0: zeros(self.batch_size, self.n)}
+        self.vals_bm2 = {0: zeros(self.batch_size, self.n, self.n)}
 
     def __call__(self, t):
         super(StratonovichBrownianRoughPath, self).__call__(t)
         B_t = self._bm(t)
-        return B_t, 1 / 2 * einsum('bi,bj -> bij', B_t, B_t)
+        B2_t = self._bm2(t)
+        for i in range(self.n):
+            B2_t[:, i, i] = 1 / 2 * B_t[:, i].square()
+        return B_t, B2_t
 
 
 class ItoBrownianRoughPath(StratonovichBrownianRoughPath):
