@@ -1,5 +1,6 @@
+from ExamplePaths import StratonovichBrownianRoughPath
 from RDEs import *
-from test.test_utils import getsize
+from test_utils import getsize
 from time import time
 import iisignature
 
