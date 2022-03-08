@@ -57,7 +57,7 @@ class RDESolution:
         with a rough path x
 
         :param drift: mu: (Y [b x m], t [1]) |-> mu(Y, t) [b x m]
-        :param f: Y [b x m] |-> f(Y) [b x m x n]
+        :param f: (Y [b x m], t [1]) |-> f(Y) [b x m x n]
         :param path: Rough path x
         :param f_prime: Y [b x m], t[1] |-> D_Y f [b x m x n x m] OR 'difference_quotient', 'exact_no_grads', 'exact_with_grads' for automatic computation OR constant tensor [b x m x n x m]
         :param starting_point: Y_0
@@ -112,8 +112,8 @@ class RDESolution:
         if show_progress:
             iteration = tqdm(iteration)
         for t_i in iteration:
-            mu = self.drift(Y_last_t_i, last_t_i)  # b x m
-            sigma = Y_prime_last_t = self.f(Y_last_t_i, last_t_i)
+            mu = self.drift(Y_last_t_i, tensor(last_t_i))  # b x m
+            sigma = Y_prime_last_t = self.f(Y_last_t_i, tensor(last_t_i))
             if self.f_prime == "difference_quotient":
                 grad_f_Y = _approx_jacobian_x(self.f, Y_last_t_i, tensor(last_t_i), self.delta_t_max / 2)
             elif self.f_prime == "exact_no_grads":
