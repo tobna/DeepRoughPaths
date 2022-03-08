@@ -170,11 +170,10 @@ class RoughPath(ABC):
             x1_t_i, x2_t_i = self(t_i)
             x1_delta = x1_t_i - x1_last
             x2_delta = x2_t_i - x2_last - einsum('ab,ac -> abc', x1_last, x1_delta)
-            sig_vals_t_i = [sig_vals_last_t_i[0], x1_t_i, x2_t_i]
+            sig_vals_t_i = [sig_list[0], x1_t_i, x2_t_i]
             for n in range(3, N):
-
-                sig_val_t_i_lv_n = sig_vals_last_t_i[n] + einsum('b...,bj -> b...j', sig_vals_last_t_i[n-1], x1_delta) + \
-                                   einsum('b...,bij -> b...ij', sig_vals_last_t_i[n-2], x2_delta)
+                sig_val_t_i_lv_n = sig_vals_last_t_i[n] + einsum('b...,bj -> b...j', sig_vals_last_t_i[n-1], x1_delta) \
+                                   + einsum('b...,bij -> b...ij', sig_vals_last_t_i[n-2], x2_delta)
                 sig_vals_t_i.append(sig_val_t_i_lv_n)
             sig_vals_last_t_i = sig_vals_t_i
 

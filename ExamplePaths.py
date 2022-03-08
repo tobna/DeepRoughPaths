@@ -6,6 +6,8 @@ class StratonovichBrownianRoughPath(RoughPath):
         super(StratonovichBrownianRoughPath, self).__init__(n, batch_size)
         self.vals_bm1 = {0: zeros(batch_size, n)}
         self.vals_bm2 = {0: zeros(batch_size, n, n)}
+        self.last_bm2_t = 0
+        self.last_bm2_val = self.vals_bm2[0]
 
     p = 2.00001
 
@@ -29,12 +31,16 @@ class StratonovichBrownianRoughPath(RoughPath):
         B_t = (t - last_t) / (next_t - last_t) * self.vals_bm1[next_t] + (next_t - t) / (next_t - last_t) \
               * self.vals_bm1[last_t] + sqrt((next_t - t) * (t - last_t) / (next_t - last_t)) * Z
         self.vals_bm1[t] = B_t
-        bm2_keys = set(self.vals_bm2.keys())
-        for k in bm2_keys:
+        bm1_keys = sorted(set(self.vals_bm1.keys()))
+        for k in bm1_keys:
             if k < t:
+                self.last_bm2_t = k
+                self.last_bm2_val = self.vals_bm2[k]
                 continue
-            # use all sampled points for approximation of iterated integrals
-            self.vals_bm2.pop(k)
+            if k > t:
+                # use all sampled points for approximation of iterated integrals
+                self.vals_bm2.pop(k)
+            self._bm2(k)
         return B_t
 
     def _bm2(self, t):
@@ -43,24 +49,21 @@ class StratonovichBrownianRoughPath(RoughPath):
         if t in self.vals_bm2.keys():
             return self.vals_bm2[t]
 
-        t_start = max(self.vals_bm2.keys())
-        bm2_s = self.vals_bm2[t_start]
-        s_last = t_start
-        for s in sorted(self.vals_bm1.keys()):
-            if s <= t_start:
-                continue
+        assert t > self.last_bm2_t, f"Only calculate forward; no inbetween steps"
 
-            bm2_s = bm2_s + einsum('bi, bj -> bij', self.vals_bm1[s], self.vals_bm1[s] - self.vals_bm1[s_last])
-            self.vals_bm2[s] = bm2_s
+        bm2_t = self.last_bm2_val + einsum('bi, bj -> bij', self.vals_bm1[t], self.vals_bm1[t] - self.vals_bm1[self.last_bm2_t])
+        self.vals_bm2[t] = bm2_t
+        self.last_bm2_t = t
+        self.last_bm2_val = bm2_t
 
-            if s == t:
-                break
-        return bm2_s
+        return bm2_t
 
     def reset(self):
         super(StratonovichBrownianRoughPath, self).reset()
         self.vals_bm1 = {0: zeros(self.batch_size, self.n)}
         self.vals_bm2 = {0: zeros(self.batch_size, self.n, self.n)}
+        self.last_bm2_t = 0
+        self.last_bm2_val = self.vals_bm2[0]
 
     def __call__(self, t):
         super(StratonovichBrownianRoughPath, self).__call__(t)
