@@ -29,7 +29,8 @@ class StratonovichBrownianRoughPath(RoughPath):
         B_t = (t - last_t) / (next_t - last_t) * self.vals_bm1[next_t] + (next_t - t) / (next_t - last_t) \
               * self.vals_bm1[last_t] + sqrt((next_t - t) * (t - last_t) / (next_t - last_t)) * Z
         self.vals_bm1[t] = B_t
-        for k in self.vals_bm2.keys():
+        bm2_keys = set(self.vals_bm2.keys())
+        for k in bm2_keys:
             if k < t:
                 continue
             # use all sampled points for approximation of iterated integrals
