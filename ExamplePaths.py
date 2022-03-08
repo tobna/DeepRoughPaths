@@ -31,19 +31,24 @@ class StratonovichBrownianRoughPath(RoughPath):
         B_t = (t - last_t) / (next_t - last_t) * self.vals_bm1[next_t] + (next_t - t) / (next_t - last_t) \
               * self.vals_bm1[last_t] + sqrt((next_t - t) * (t - last_t) / (next_t - last_t)) * Z
         self.vals_bm1[t] = B_t
-        bm1_keys = sorted(set(self.vals_bm1.keys()))
-        for k in bm1_keys:
-            if k < t:
-                self.last_bm2_t = k
-                self.last_bm2_val = self.vals_bm2[k]
-                continue
-            if k > t:
-                # use all sampled points for approximation of iterated integrals
-                self.vals_bm2.pop(k)
-            self._bm2(k)
+
+        if self.n > 1:
+            bm1_keys = sorted(set(self.vals_bm1.keys()))
+            for k in bm1_keys:
+                if k < t:
+                    self.last_bm2_t = k
+                    self.last_bm2_val = self.vals_bm2[k]
+                    continue
+                if k > t:
+                    # use all sampled points for approximation of iterated integrals
+                    self.vals_bm2.pop(k)
+                self._bm2(k)
         return B_t
 
     def _bm2(self, t):
+        if self.n == 1:
+            return self._bm(t).square().view(-1, 1) / 2
+
         assert t in self.vals_bm1.keys(), f"Iterated integrals can only be calculated after value at this point is " \
                                           f"called; but got t={t}"
         if t in self.vals_bm2.keys():
@@ -69,8 +74,9 @@ class StratonovichBrownianRoughPath(RoughPath):
         super(StratonovichBrownianRoughPath, self).__call__(t)
         B_t = self._bm(t)
         B2_t = self._bm2(t)
-        for i in range(self.n):
-            B2_t[:, i, i] = 1 / 2 * B_t[:, i].square()
+        if self.n > 1:
+            for i in range(self.n):
+                B2_t[:, i, i] = B_t[:, i].square() / 2
         return B_t, B2_t
 
 
