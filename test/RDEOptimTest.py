@@ -6,8 +6,12 @@ from tqdm import tqdm
 import torch.nn as nn
 from torch.optim import Adam
 
+import sys, os, inspect
+currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+parentdir = os.path.dirname(currentdir)
+sys.path.insert(0, parentdir)
+
 from ExamplePaths import ItoBrownianRoughPath
-from RoughPaths import *
 from RDEs import *
 
 
