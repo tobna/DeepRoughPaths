@@ -63,13 +63,14 @@ def _tensor_exp(X):
 
 
 class RoughPath(ABC):
-    def __init__(self, n, batch_size, sig_cache_size=10):
+    def __init__(self, n, batch_size, sig_cache_size=10, device='cpu'):
         assert sig_cache_size > 0, f"Need cache of at least 1, but got {sig_cache_size}"
         self.n = n
         self.batch_size = batch_size
         self.eval_points = {0.}
         self.signature_vals = []
         self.sig_cache_size = sig_cache_size + 1
+        self.device = device
 
     @property
     @abstractmethod
@@ -121,7 +122,7 @@ class RoughPath(ABC):
         assert 3 > self.p >= 2
         assert t >= 0.
         x1_t, x2_t = self(t)
-        sig_list = [ones(self.batch_size), x1_t, x2_t]
+        sig_list = [ones(self.batch_size, device=self.device), x1_t, x2_t]
         if N <= 3:
             return sig_list[:N]
 
@@ -149,7 +150,7 @@ class RoughPath(ABC):
                 sig_vals_idx = n - 3
                 sig_shape = [self.batch_size] + n * [self.n]
                 if len(self.signature_vals) <= sig_vals_idx:
-                    self.signature_vals.append({0.: zeros(*sig_shape)})
+                    self.signature_vals.append({0.: zeros(*sig_shape, device=self.device)})
                 else:
                     self.signature_vals[sig_vals_idx] = {0.: zeros(*sig_shape)}
             t_start = 0.
@@ -236,22 +237,23 @@ class FunctionControlledPath(ControlledPath):
 
 
 class FTime(ControlledPath):
-    def __init__(self, n, batch_size=1):
+    def __init__(self, n, batch_size=1, device='cpu'):
         self.n = n
         self.batch_size = batch_size
+        self.device = device
 
     def __call__(self, t):
         super(FTime, self).__call__(t)
-        return t * eye(self.n).repeat(self.batch_size, 1, 1), zeros(self.batch_size, self.n, self.n, self.n)
+        return t * eye(self.n, device=self.device).repeat(self.batch_size, 1, 1), zeros(self.batch_size, self.n, self.n, self.n)
 
 
 class ExtendedRoughPath(RoughPath):
-    def __init__(self, path: RoughPath, delta_t=0.01, approx_x2_cache_size=None):
-        super(ExtendedRoughPath, self).__init__(path.n + 1, path.batch_size)
+    def __init__(self, path: RoughPath, delta_t=0.01, approx_x2_cache_size=None, device='cpu'):
+        super(ExtendedRoughPath, self).__init__(path.n + 1, path.batch_size, device=device)
         self.path = path
         self.delta_t = delta_t
         self.approx_x2_cache_size = None if approx_x2_cache_size is None else approx_x2_cache_size + 1
-        self.x2_parent_wrt_time = {0.: zeros(self.batch_size, self.n - 1)}
+        self.x2_parent_wrt_time = {0.: zeros(self.batch_size, self.n - 1, device=self.device)}
 
     @property
     def p(self):
@@ -259,7 +261,7 @@ class ExtendedRoughPath(RoughPath):
 
     def approx_x2(self, t):
         if t == 0:
-            return zeros(self.batch_size, self.n, self.n)
+            return zeros(self.batch_size, self.n, self.n, device=self.device)
 
         # i, j < n-1 => take values from parent path
         x1_t_parent, x2_t_parent = self.path(t)  # b x n-1 x n-1
@@ -291,7 +293,7 @@ class ExtendedRoughPath(RoughPath):
         x2_t_time_wrt_parent = t * x1_t_parent - x2_t_parent_wrt_time
 
         # i = n-1, j = n-1 => int tau dtau = t^2/2
-        x2_t_time_wrt_time = t ** 2 / 2 * ones(self.batch_size, 1, 1)  # b x 1 x 1
+        x2_t_time_wrt_time = t ** 2 / 2 * ones(self.batch_size, 1, 1, device=self.device)  # b x 1 x 1
 
         # correct order from:
         # x2_t(b, i ,j) = int x1_tau(b, i) dx1_tau(b, j)
@@ -307,10 +309,10 @@ class ExtendedRoughPath(RoughPath):
             return cat((self.path(t), t * ones(self.batch_size, 1)), dim=1)
 
         x1_t, _ = self.path(t)
-        hat_x1_t = cat((x1_t, t * ones(self.batch_size, 1)), dim=1)
+        hat_x1_t = cat((x1_t, t * ones(self.batch_size, 1, device=self.device)), dim=1)
 
         return hat_x1_t, self.approx_x2(t)
 
     def reset(self):
-        self.x2_parent_wrt_time = {0.: zeros(self.batch_size, self.n - 1)}
+        self.x2_parent_wrt_time = {0.: zeros(self.batch_size, self.n - 1, device=self.device)}
         self.path.reset()

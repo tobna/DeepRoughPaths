@@ -17,7 +17,7 @@ def strong_error(approx_sol, exact_sol):
     return (approx_sol - exact_sol).abs().mean(dim=0)
 
 
-batch_size = 100
+batch_size = 1000
 alpha = .1
 beta = .05
 x0 = .5
