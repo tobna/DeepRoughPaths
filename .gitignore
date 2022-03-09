@@ -152,3 +152,6 @@ fabric.properties
 
 # profiling artefacts
 *.profile
+
+# model parameters
+models/
