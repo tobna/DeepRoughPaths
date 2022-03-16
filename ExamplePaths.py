@@ -99,6 +99,7 @@ class ItoBrownianRoughPath(StratonovichBrownianRoughPath):
 class StratonovichFractionalBrownianRoughPath(StratonovichBrownianRoughPath):
     def __init__(self, n, H, steps=1000, T=1., batch_size=1, device='cpu'):
         super(StratonovichFractionalBrownianRoughPath, self).__init__(n, batch_size, device=device)
+        assert H > 1/3, f"As we only consider rough paths for p < 3, we can only deal with H > 1/3; but got {H} instead."
         self.H = H
         self.steps = steps
         self.T = T
